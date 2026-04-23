@@ -51,6 +51,19 @@ The notebook pipeline combines the following components:
 - Generator: `microsoft/Phi-3-mini-4k-instruct` (4-bit quantized)
 - Verifier: `cross-encoder/nli-deberta-v3-small`
 
+### Models and Core Tech (Explicit)
+
+| Layer | Component | Used In Notebook |
+|---|---|---|
+| Generator LLM | `microsoft/Phi-3-mini-4k-instruct` | Answer generation, reasoning traces, query decomposition |
+| Quantization | `bitsandbytes` (4-bit NF4) | Memory-efficient model loading |
+| Embedding model | `BAAI/bge-small-en-v1.5` | Query/passage embeddings for retrieval |
+| Verifier model | `cross-encoder/nli-deberta-v3-small` | Claim-level entailment checking |
+| Vector DB | `FAISS` (`IndexFlatIP`) | Similarity search over passage embeddings |
+| Dataset | `hotpot_qa` (`distractor`, validation sample) | Multi-hop QA benchmark data |
+| Framework stack | `transformers`, `accelerate`, `sentence-transformers` | Model loading and inference |
+| Analysis stack | `pandas`, `matplotlib`, `numpy` | Metrics aggregation and plots |
+
 High-level flow:
 
 1. Build a deduplicated passage corpus from sampled HotpotQA contexts.
@@ -93,6 +106,32 @@ The notebook reports a broad set of quality and efficiency metrics:
 - Average latency
 - EM per LLM call (cost-efficiency proxy)
 - Adaptive step-efficiency curve
+
+## Pipeline Results and Findings
+
+The notebook benchmark compares `standard`, `recursive`, and `adaptive` on 75 sampled HotpotQA validation questions.
+
+### Main Results (from current notebook run)
+
+| Mode | EM (%) | Length-Penalized F1 | Faithfulness (%) | True Hallucination (%) | Avg LLM Calls | Avg Latency (s) |
+|---|---:|---:|---:|---:|---:|---:|
+| Standard | 65.3 | 0.672 | 94.7 | 5.3 | 1.0 | 5.8 |
+| Recursive | 64.0 | 0.665 | 95.5 | 4.0 | 3.0 | 20.5 |
+| Adaptive | **68.0** | **0.697** | **100.0** | **0.0** | 1.2 | 6.3 |
+
+### Step-Efficiency (Adaptive)
+
+- Step 1: 65%
+- Step 2: 71%
+- Step 3: 0%
+
+### Key Findings
+
+- Adaptive mode achieves the best EM and best length-penalized F1 in this run.
+- Adaptive mode reaches full faithfulness in the reported benchmark and eliminates true hallucinations.
+- Recursive mode is the most expensive in call count and latency.
+- Adaptive mode stays close to standard in cost while outperforming it on quality metrics.
+- A substantial gap between faithfulness and EM indicates retrieval limitations still exist even when answers are evidence-grounded.
 
 ## Quick Start
 
