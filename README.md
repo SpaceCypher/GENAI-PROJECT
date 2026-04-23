@@ -1,46 +1,161 @@
-# Adaptive Recursive RAG Framework 🧠
+# Adaptive Recursive RAG for Multi-Hop QA
 
-This project implements a self-contained, deterministic **Retrieval-Augmented Generation (RAG)** benchmark using Kaggle's T4 GPU. Its core objective is to evaluate whether an active, verification-driven **Adaptive Retrieval** loop can achieve the accuracy of brute-force Recursive RAG, but with significantly fewer computational steps and lower hallucination rates.
+This repository contains an end-to-end research notebook that benchmarks three Retrieval-Augmented Generation (RAG) control strategies for multi-hop question answering on HotpotQA.
 
-## What It Does
+The project focuses on one core question:
 
-The system evaluates multi-hop reasoning questions from the **HotpotQA** dataset across three distinct RAG architectures:
+Can adaptive, verification-guided retrieval preserve strong answer quality while reducing unnecessary model calls compared to fixed-depth recursion?
 
-1. **Standard RAG (Baseline):** 
-   - A single-shot retrieval loop. Retrieves $k$ documents, feeds them into the generic generation prompt, and halts immediately. Fast but natively weak on multi-hop reasoning.
-2. **Always Recursive RAG:**
-   - Brute-force accumulation. Forces the system into exactly 3 fixed retrieval-generation cycles (`k_schedule = [8, 9, 10]`) over the same static query before concluding. 
-3. **Adaptive RAG (State-of-the-Art):**
-   - An intelligent, autonomous reasoning loop. At each step, it extracts atomic factual claims from its generated answer and passes them through an independent LLM verification prompt against the retrieved context. 
-   - If a majority vote of claims passes, the loop stops early.
-   - If claims fail, it triggers an LLM to actively re-synthesize a brand-new focal subquery (`refine_query`) and loops again to retrieve new documents.
-   - Includes protective guards against "abstention" hallucinations to elegantly surrender when data is provably absent.
+## Repository Scope
 
-## How the System Works
+Current repository contents:
 
-The entire pipeline is driven by small, powerful local models to ensure tight, 100% reproducible execution:
-- **Embedding / Retrieval:** `BAAI/bge-small-en-v1.5` bound to a purely in-memory normalized inner-product `FAISS` index.
-- **Generation / Validation:** `microsoft/Phi-3-mini-4k-instruct` loaded in 4-bit quantization, running strictly deterministic parameters (`temperature=0.0`, `do_sample=False`).
+- `nb.ipynb`: primary implementation, benchmarking, and visualization notebook
 
-### Key Architectural Failsafes
-- **Semantic Ground-Truth Alignment:** Pre-calculated cosine similarities automatically map manual queries directly to physical database objects to guarantee metric integrity.
-- **Decoupled Request Flow:** Extracted refined queries are utilized exclusively for FAISS embedding space routing. Generation calls strictly evaluate the original user intention, immunizing the system against LLM query-drift.
-- **Lexical Overlap Filters:** Extracted assertions are heuristically parsed for semantic overlap with the core string to purge grammatical fluff from entering the deep LLM verify-vote cycle.
+At this stage, the notebook is the project. It includes setup, model loading, retrieval, generation, adaptive control logic, evaluation, and plotting.
 
-## What is Expected
+## Problem Statement
 
-By the end of the final benchmark phase, the system should generate a structured `Pandas DataFrame` containing metrics for all 75 dataset questions across all 3 algorithmic modes. The expected hypothesis output is:
-- **Standard:** Low latency, Low accuracy.
-- **Recursive:** High latency, High accuracy, Maximum steps.
-- **Adaptive:** High accuracy matching Recursive, but with statistically significant reductions in Average Steps and Hallucination Rates.
+Single-pass RAG is often insufficient for multi-hop QA because required evidence may be distributed across multiple passages. A fixed recursive strategy can recover some missed evidence but spends the same compute budget on easy and hard questions.
 
-## What's Left (The Final Sprint)
+This project implements an adaptive controller that uses claim-level verification to decide whether to:
 
-All of the core RAG architectures and orchestration mechanics have entirely been built, verified, and cleanly tested in the `Demo` cell. 
+- stop and return an answer,
+- refine the query,
+- retrieve more evidence, or
+- abstain when support is insufficient.
 
-We only have two final procedural checkpoints remaining:
-- [ ] **Phase 7 (Benchmarking & Evaluation):** Executing the heavy 1,800-call LLM iteration loop over all 75 questions inside the Kaggle environment to formally calculate Accuracy, Hallucination %, Abstention Rate, Avg Steps, and Avg Latency metrics. *(Requires runtime diligence/JSON checkpoints to guard against Kaggle session disconnects).*
-- [ ] **Phase 8 (Visualization):** Piping the calculated DataFrame into Matplotlib bars representing metric comparisons and saving them to disk (`/kaggle/working`). 
+## Implemented Modes
 
----
-*Built incrementally in pair-programming workflow.*
+All modes share the same dataset sample, retriever stack, and generator model. The difference is only in control policy.
+
+1. `standard`
+- One retrieval pass, one generation pass.
+- Fastest, lowest control overhead.
+
+2. `recursive`
+- Fixed retrieval schedule across multiple steps.
+- More compute, no adaptive stopping.
+
+3. `adaptive`
+- Iterative loop with claim extraction and NLI-based verification.
+- Uses policy actions to continue, refine, stop, or abstain.
+
+## Technical Architecture
+
+The notebook pipeline combines the following components:
+
+- Dataset: HotpotQA (`distractor` split)
+- Retrieval embeddings: `BAAI/bge-small-en-v1.5`
+- Vector index: FAISS (`IndexFlatIP`)
+- Generator: `microsoft/Phi-3-mini-4k-instruct` (4-bit quantized)
+- Verifier: `cross-encoder/nli-deberta-v3-small`
+
+High-level flow:
+
+1. Build a deduplicated passage corpus from sampled HotpotQA contexts.
+2. Embed corpus and index with FAISS.
+3. Retrieve top passages for a query.
+4. Generate answer (+ reasoning trace format).
+5. Extract claims from answer/reasoning.
+6. Verify claims against retrieved docs.
+7. Use policy thresholds to stop, refine, retrieve more, or abstain.
+8. Score outputs and aggregate metrics per mode.
+
+## Notebook Section Map
+
+The notebook is organized into clear stages:
+
+- Setup and imports
+- Dataset loading and corpus construction
+- FAISS index construction
+- Phi-3 model loading (4-bit)
+- NLI verifier loading
+- Core retrieval, generation, and verification functions
+- Pipeline orchestrator (`run_pipeline`)
+- Benchmark runner (all modes over sampled questions)
+- Results and tabular evaluation
+- Step-efficiency and ablation cells
+- Final visualizations
+
+## Evaluation Metrics
+
+The notebook reports a broad set of quality and efficiency metrics:
+
+- Exact Match (EM %)
+- F1 and length-penalized F1
+- Faithfulness / grounding score
+- True hallucination rate
+- Retrieval-failure proxy rate (faithful but wrong)
+- Abstention rate
+- Average steps
+- Average LLM calls
+- Average latency
+- EM per LLM call (cost-efficiency proxy)
+- Adaptive step-efficiency curve
+
+## Quick Start
+
+1. Open `nb.ipynb` in Kaggle, VS Code Jupyter, or JupyterLab.
+2. Ensure GPU runtime is enabled (recommended).
+3. Run notebook cells sequentially from top to bottom.
+4. Let model downloads and index construction finish.
+5. Run benchmark and evaluation cells.
+6. Inspect printed tables and generated plots.
+
+## Dependencies
+
+The notebook installs required packages in its setup cell:
+
+- `transformers==4.41.2`
+- `accelerate==0.30.1`
+- `bitsandbytes`
+- `sentence-transformers==2.7.0`
+- `faiss-cpu`
+- `datasets`
+- `pandas`
+- `matplotlib`
+
+## Runtime and Hardware Notes
+
+- GPU is strongly recommended; the notebook is tuned for Kaggle T4-like resources.
+- First run may be slow due to model/dataset downloads.
+- Benchmark runtime scales with sample size and mode count.
+- Quantized loading is used to fit the generator model more reliably in constrained VRAM.
+
+## Output Artifacts
+
+When run in Kaggle-style environments, the notebook writes artifacts such as:
+
+- summary CSV files (for benchmark metrics)
+- benchmark figures (PNG plots)
+
+Paths are currently configured to Kaggle working directories in parts of the notebook (for example, `/kaggle/working/...`). If you run locally, adjust output paths accordingly.
+
+## Reproducibility Guidance
+
+To keep runs comparable:
+
+- Use the same sample size and split settings.
+- Keep package versions aligned with the setup cell.
+- Avoid changing policy thresholds unless conducting an ablation.
+- Report both quality and efficiency metrics, not EM alone.
+
+## Limitations
+
+- Results depend on retrieval quality from the sampled context corpus.
+- Benchmark outcomes can vary across hardware/runtime conditions.
+- String/heuristic correctness checks may not capture all semantic equivalences.
+- Some policy thresholds are tuned heuristically and may require retuning for new datasets.
+
+## Intended Use
+
+This repository is intended for:
+
+- research experimentation on adaptive RAG control,
+- classroom or project demonstrations of retrieval-verification loops,
+- extending to stronger verifiers, retrievers, or alternative policy logic.
+
+## Project Goal
+
+Demonstrate that adaptive verification-driven retrieval can reach competitive multi-hop QA quality while reducing average compute compared to fixed recursive retrieval, and while lowering unsupported answer risk.
